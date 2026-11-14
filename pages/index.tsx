@@ -86,13 +86,22 @@ export default function Home() {
   const last = mkt?.markPx;
   const chg = mkt ? ((mkt.markPx - mkt.prevDayPx) / mkt.prevDayPx) * 100 : 0;
 
+  // OpenFinance returns clearinghouseState either flat or grouped per dex ({native:{...}, xyz:{...}}).
+  const dexStates: Record<string, any> = useMemo(() => {
+    const cs = account?.clearinghouseState;
+    if (!cs) return {};
+    return cs.withdrawable !== undefined || cs.assetPositions !== undefined ? { native: cs } : cs;
+  }, [account]);
   const freeUsdc = useMemo(() => {
     if (!account) return null;
-    const perp = Number(account.clearinghouseState?.withdrawable ?? 0);
+    const perp = Number(dexStates.native?.withdrawable ?? 0);
     const spot = Number(account.spotClearinghouseState?.balances?.find((b: any) => b.coin === "USDC")?.total ?? 0);
     return perp + spot;
-  }, [account]);
-  const myPositions: any[] = useMemo(() => (account?.clearinghouseState?.assetPositions || []).map((p: any) => p.position ?? p), [account]);
+  }, [account, dexStates]);
+  const myPositions: any[] = useMemo(
+    () => Object.entries(dexStates).flatMap(([dex, st]: [string, any]) => (st?.assetPositions || []).map((p: any) => ({ dex, ...(p.position ?? p) }))),
+    [dexStates]
+  );
 
   const pick = (s: string) => { setSymbol(s); saveLS("symbol", s); setSelected(null); setMenu(false); setQ(""); };
   const pickRef = (r: string) => { const n = byRef[r]; if (n) pick(n); };
