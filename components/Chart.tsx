@@ -57,10 +57,12 @@ export function Chart({ candles, intervalMs, events, positions, traders, lastPri
   // Merge Centaur events + position opens (deduped by positionId) into one marker set.
   const markers = useMemo(() => {
     const seen = new Set<number>();
-    const out: CEvent[] = [...events];
+    const ids = new Set<number>();
+    const out: CEvent[] = events.filter((e) => (ids.has(e.id) ? false : (ids.add(e.id), true)));
     events.forEach((e) => e.positionId && e.type === "open" && seen.add(e.positionId));
     for (const p of positions) {
-      if (seen.has(p.id)) continue;
+      if (seen.has(p.id) || ids.has(-p.id)) continue;
+      ids.add(-p.id);
       out.push({ id: -p.id, type: "open", direction: p.direction, price: p.openPrice, time: p.openAt, traderId: p.traderId, positionId: p.id, symbol: p.symbol });
     }
     return out;
