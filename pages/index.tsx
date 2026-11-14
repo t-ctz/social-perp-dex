@@ -7,6 +7,7 @@ import { Feed } from "@/components/Feed";
 import { Positioning } from "@/components/Positioning";
 import { Analytics } from "@/components/Analytics";
 import { Chat } from "@/components/Chat";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { FloatingPanel } from "@/components/FloatingPanel";
 import { Conn, Settings } from "@/components/Settings";
 import { DOWN, UP, fmtCompact, fmtNum, fmtPct, fmtPrice } from "@/lib/format";
@@ -65,7 +66,10 @@ export default function Home() {
   const sref = socialRef(symbol);
   usePoll(async () => {
     const r = await fetch(`/api/centaur?symbol=${encodeURIComponent(sref)}`, { headers: { "x-centaur-key": conn.centaurKey, "x-centaur-base": conn.centaurBase } });
-    setData(await r.json());
+    const d = await r.json();
+    // Never let a bad or empty response wipe data already on screen, or replace live data with the snapshot.
+    if (!r.ok || !d || !Array.isArray(d.feed) || !Array.isArray(d.events)) return;
+    setData((prev) => (d.source === "snapshot" && prev?.source === "live" && prev.symbol === d.symbol ? prev : d));
   }, 30000, [sref, conn.centaurKey, conn.centaurBase]);
 
   const loadAccount = async () => {
@@ -86,13 +90,22 @@ export default function Home() {
   const last = mkt?.markPx;
   const chg = mkt ? ((mkt.markPx - mkt.prevDayPx) / mkt.prevDayPx) * 100 : 0;
 
+  // OpenFinance returns clearinghouseState either flat or grouped per dex ({native:{...}, xyz:{...}}).
+  const dexStates: Record<string, any> = useMemo(() => {
+    const cs = account?.clearinghouseState;
+    if (!cs) return {};
+    return cs.withdrawable !== undefined || cs.assetPositions !== undefined ? { native: cs } : cs;
+  }, [account]);
   const freeUsdc = useMemo(() => {
     if (!account) return null;
-    const perp = Number(account.clearinghouseState?.withdrawable ?? 0);
+    const perp = Number(dexStates.native?.withdrawable ?? 0);
     const spot = Number(account.spotClearinghouseState?.balances?.find((b: any) => b.coin === "USDC")?.total ?? 0);
     return perp + spot;
-  }, [account]);
-  const myPositions: any[] = useMemo(() => (account?.clearinghouseState?.assetPositions || []).map((p: any) => p.position ?? p), [account]);
+  }, [account, dexStates]);
+  const myPositions: any[] = useMemo(
+    () => Object.entries(dexStates).flatMap(([dex, st]: [string, any]) => (st?.assetPositions || []).map((p: any) => ({ dex, ...(p.position ?? p) }))),
+    [dexStates]
+  );
 
   const pick = (s: string) => { setSymbol(s); saveLS("symbol", s); setSelected(null); setMenu(false); setQ(""); };
   const pickRef = (r: string) => { const n = byRef[r]; if (n) pick(n); };
@@ -162,7 +175,7 @@ export default function Home() {
               <span className="ml-3 text-zinc-600">Avatars = tracked traders (X &amp; Telegram) · ring = direction · dashed = exit</span>
             </div>
             <div className="min-h-0 flex-1">
-              <Chart candles={candles} intervalMs={INTERVALS[interval]} events={data?.events || []} positions={data?.positions || []} traders={data?.traders || {}} lastPrice={last} showTrades={showTrades} showLevels={showLevels} selectedId={selected?.id} onSelect={setSelected} />
+              <ErrorBoundary name="Chart"><Chart candles={candles} intervalMs={INTERVALS[interval]} events={data?.events || []} positions={data?.positions || []} traders={data?.traders || {}} lastPrice={last} showTrades={showTrades} showLevels={showLevels} selectedId={selected?.id} onSelect={setSelected} /></ErrorBoundary>
             </div>
           </section>
           <section className="row-span-2 min-h-0 border-r border-white/10"><OrderBook symbol={symbol} onPick={setPicked} /></section>
@@ -177,7 +190,7 @@ export default function Home() {
               {freeUsdc != null && <span className="ml-auto self-center px-4 text-zinc-400">Balance <b className="text-white">${fmtNum(freeUsdc)}</b> USDC</span>}
             </div>
             <div className="min-h-0 flex-1">
-              {bottomTab === "social" ? (data ? <Positioning symbol={sref} stats={data.stats} positions={data.positions} traders={data.traders} lastPrice={last} /> : <div className="p-4 text-xs text-zinc-500">Loading…</div>) : <MyPositions rows={myPositions} hasKey={hasKey} err={accErr} onConnect={() => setSettings(true)} />}
+              {bottomTab === "social" ? (data ? <ErrorBoundary name="Positioning"><Positioning symbol={sref} stats={data.stats} positions={data.positions} traders={data.traders} lastPrice={last} /></ErrorBoundary> : <div className="p-4 text-xs text-zinc-500">Loading…</div>) : <MyPositions rows={myPositions} hasKey={hasKey} err={accErr} onConnect={() => setSettings(true)} />}
             </div>
           </section>
         </div>
@@ -185,12 +198,12 @@ export default function Home() {
 
       {mounted && data && showFeed && (
         <FloatingPanel id="feed" title={<>📡 Social feed · {sref}</>} defaultPos={{ x: 16, y: Math.max(120, win.h - 270 - 360 - 10) }} width={330} height={340} onClose={() => setShowFeed(false)}>
-          <Feed feed={data.feed} traders={data.traders} selectedId={selected?.id} symbol={sref} onSelect={(e) => setSelected(e)} />
+          <ErrorBoundary name="Feed"><Feed feed={data.feed} traders={data.traders} selectedId={selected?.id} symbol={sref} onSelect={(e) => setSelected(e)} /></ErrorBoundary>
         </FloatingPanel>
       )}
       {mounted && data && showAnalytics && (
         <FloatingPanel id="analytics" title={<>📊 Positioning analytics</>} defaultPos={{ x: 16, y: 112 }} width={310} height={330} defaultCollapsed onClose={() => setShowAnalytics(false)}>
-          <Analytics data={data} symbol={sref} tradable={tradable} onPick={pickRef} />
+          <ErrorBoundary name="Analytics"><Analytics data={data} symbol={sref} tradable={tradable} onPick={pickRef} /></ErrorBoundary>
         </FloatingPanel>
       )}
       {mounted && showChat && (
