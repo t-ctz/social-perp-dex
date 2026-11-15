@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { snapshotPayload } from "@/lib/snapshot";
-import { CENTAUR_SYMBOL, UNMAPPED, VERIFIED } from "@/lib/mapping";
+import { CENTAUR_SYMBOL, ID_OVERRIDE, UNMAPPED, VERIFIED } from "@/lib/mapping";
 import type { CEvent, CPosition, CentaurPayload, FeedItem, Trader, TrendingRow, FadeRow, SmartRow, SpecialistRow } from "@/lib/types";
 
 // Centaur social data for one Hyperliquid market. Never assumes a response shape: every
@@ -56,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (UNMAPPED.has(symbol)) return res.json(snapshotPayload(symbol, `${symbol} has no Centaur equivalent yet.`));
   const target = CENTAUR_SYMBOL[symbol] ?? symbol;
-  const id = VERIFIED[target] ?? (await resolveAssetId(base, key, target));
+  const id = ID_OVERRIDE[symbol] ?? VERIFIED[target] ?? (await resolveAssetId(base, key, target));
   if (!id) return res.json(snapshotPayload(symbol, `Centaur has no asset named ${target} (Hyperliquid ${symbol}).`));
 
   const notes: string[] = [];

@@ -3,12 +3,14 @@
 // 1. CENTAUR_SYMBOL: Hyperliquid names that differ from Centaur's symbol.
 // 2. VERIFIED: Centaur symbol -> asset id. Every ID here appeared in a Centaur catalog result.
 //    Anything not listed is looked up by symbol, and a miss is reported in the banner.
-// 3. UNMAPPED: Hyperliquid markets with no Centaur equivalent (chosen by the user or not found in Centaur).
+// 3. ID_OVERRIDE: Hyperliquid market -> Centaur asset id, when the symbol alone would be ambiguous.
+// 4. UNMAPPED: Hyperliquid markets with no Centaur equivalent.
 
 export const CENTAUR_SYMBOL: Record<string, string> = {
   SILVER: "XAG",
   GOLD: "PAXG",
   XYZ100: "QQQ",
+  CAMBRICON: "688256",
 };
 
 export const VERIFIED: Record<string, number> = {
@@ -23,6 +25,7 @@ export const VERIFIED: Record<string, number> = {
   // Stocks
   TSLA: 749, NVDA: 822, AAPL: 741, MSFT: 746, AMD: 781, MU: 818, SNDK: 838, AAOI: 917,
   SOFTBANK: 940, HYUNDAI: 806, KIOXIA: 937, SMSN: 837, CXMT: 1958,
+  SPCX: 840, MINIMAX: 924, ZHIPU: 926, XIAOMI: 854, STRC: 928, SHAZ: 1896, "688256": 1996,
   // FX
   EUR: 856, GBP: 893, JPY: 857,
   // Crypto
@@ -33,10 +36,16 @@ export const VERIFIED: Record<string, number> = {
   BNB: 31, BIO: 361, AIXBT: 353, AZTEC: 711, ANSEM: 1945, BTCD: 774, ACE: 275, ALGO: 74,
 };
 
+// Hyperliquid market -> Centaur asset id, where the symbol alone would point at the wrong asset.
+export const ID_OVERRIDE: Record<string, number> = {
+  PURRDAT: 892, // Hyperliquid Strategies (equity). Not the PURR spot token.
+};
+
 // No Centaur equivalent: shown as a clear message instead of a failed lookup.
 export const UNMAPPED = new Set<string>([
   "NIFTY", "SHEIN",
   "10Y", "2Y", "30Y", // rates
   "TOTAL2", "OTHERS", // crypto market indices
   "HO", // heating oil
+  "UNITREE", "RELIANCE", "OURA", "ANT", "ANTH", "OAI", "GIGADEV", // searched in Centaur: no match
 ]);
