@@ -9,10 +9,12 @@ import { Analytics } from "@/components/Analytics";
 import { Chat } from "@/components/Chat";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { FloatingPanel } from "@/components/FloatingPanel";
+import { TraderFilter, Candidate } from "@/components/TraderFilter";
 import { Conn, Settings } from "@/components/Settings";
 import { DOWN, UP, fmtCompact, fmtNum, fmtPct, fmtPrice } from "@/lib/format";
 import { hl, loadLS, saveLS, usePoll } from "@/lib/hooks";
 import { socialRef } from "@/lib/social";
+import { DEFAULT_EXCLUDED_TRADERS } from "@/lib/traderFilter";
 import type { Market } from "@/lib/hlmarkets";
 import type { CEvent, Candle, CentaurPayload } from "@/lib/types";
 
@@ -27,8 +29,8 @@ export default function Home() {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [data, setData] = useState<CentaurPayload | null>(null);
-  const [diag, setDiag] = useState<string>("starting…");
   const [selected, setSelected] = useState<CEvent | null>(null);
+  const [excluded, setExcluded] = useState<number[]>(DEFAULT_EXCLUDED_TRADERS);
   const [showTrades, setShowTrades] = useState(true);
   const [showLevels, setShowLevels] = useState(true);
   const [showFeed, setShowFeed] = useState(true);
@@ -48,9 +50,12 @@ export default function Home() {
   useEffect(() => {
     setConn({ ...DEFAULT_CONN, ...loadLS<Partial<Conn>>("conn", {}) });
     setSymbol(loadLS("symbol", "BTC"));
+    setExcluded(loadLS<number[]>("excludedTraders", DEFAULT_EXCLUDED_TRADERS));
     setWin({ w: window.innerWidth, h: window.innerHeight });
     setMounted(true);
   }, []);
+
+  const changeExcluded = (ids: number[]) => { setExcluded(ids); saveLS("excludedTraders", ids); };
 
   const focusDex = symbol.includes(":") ? symbol.split(":")[0] : "";
   usePoll(async () => {
@@ -66,19 +71,11 @@ export default function Home() {
 
   const sref = socialRef(symbol);
   usePoll(async () => {
-    const at = new Date().toLocaleTimeString();
-    try {
-      const r = await fetch(`/api/centaur?symbol=${encodeURIComponent(sref)}`, { headers: { "x-centaur-key": conn.centaurKey, "x-centaur-base": conn.centaurBase } });
-      const text = await r.text();
-      let d: any = null;
-      try { d = JSON.parse(text); } catch { setDiag(`${at} HTTP ${r.status} non-JSON: ${text.slice(0, 80)}`); return; }
-      setDiag(`${at} HTTP ${r.status} · source=${d?.source} · feed=${d?.feed?.length} · events=${d?.events?.length} · pos=${d?.positions?.length} · key=${conn.centaurKey ? "set" : "none"}`);
-      // Never let a bad or empty response wipe data already on screen, or replace live data with the snapshot.
-      if (!r.ok || !d || !Array.isArray(d.feed) || !Array.isArray(d.events)) return;
-      setData((prev) => (d.source === "snapshot" && prev?.source === "live" && prev.symbol === d.symbol ? prev : d));
-    } catch (e: any) {
-      setDiag(`${at} fetch failed: ${String(e?.message || e).slice(0, 80)}`);
-    }
+    const r = await fetch(`/api/centaur?symbol=${encodeURIComponent(sref)}`, { headers: { "x-centaur-key": conn.centaurKey, "x-centaur-base": conn.centaurBase } });
+    const d = await r.json();
+    // Never let a bad or empty response wipe data already on screen, or replace live data with the snapshot.
+    if (!r.ok || !d || !Array.isArray(d.feed) || !Array.isArray(d.events)) return;
+    setData((prev) => (d.source === "snapshot" && prev?.source === "live" && prev.symbol === d.symbol ? prev : d));
   }, 30000, [sref, conn.centaurKey, conn.centaurBase]);
 
   const loadAccount = async () => {
@@ -88,6 +85,22 @@ export default function Home() {
     if (!r.ok) { setAccErr(d.error || "account error"); setAccount(null); } else { setAccount(d); setAccErr(""); }
   };
   usePoll(loadAccount, 10000, [conn.ofKey]);
+
+  // Trader filter: hide excluded traders from chart markers, feed and positioning.
+  const excludedSet = useMemo(() => new Set(excluded), [excluded]);
+  const shownEvents = useMemo(() => (data?.events || []).filter((e) => !excludedSet.has(e.traderId)), [data, excludedSet]);
+  const shownPositions = useMemo(() => (data?.positions || []).filter((p) => !excludedSet.has(p.traderId)), [data, excludedSet]);
+  const shownFeed = useMemo(() => (data?.feed || []).filter((f) => !excludedSet.has(f.traderId)), [data, excludedSet]);
+  const candidates: Candidate[] = useMemo(() => {
+    if (!data) return [];
+    const counts = new Map<number, number>();
+    for (const e of data.events) counts.set(e.traderId, (counts.get(e.traderId) || 0) + 1);
+    for (const p of data.positions) counts.set(p.traderId, (counts.get(p.traderId) || 0) + 1);
+    return Array.from(counts.entries()).map(([id, count]) => {
+      const t = data.traders[id];
+      return { id, name: t?.name || `Trader #${id}`, avatar: t?.avatar, platform: t?.platform, count };
+    });
+  }, [data]);
 
   const mkt = useMemo(() => markets.find((c) => c.name === symbol), [markets, symbol]);
   const tradable = useMemo(() => new Set(markets.map((c) => socialRef(c.name))), [markets]);
@@ -123,10 +136,10 @@ export default function Home() {
 
   return (
     <>
-      <Head><title>{last ? `${fmtPrice(last)} ${symbol}-PERP` : "Perp"} · Social Perp DEX</title></Head>
-      <div className="flex h-screen flex-col bg-[#0b0e11]">
-        <header className="flex shrink-0 items-center gap-4 border-b border-white/10 px-4 py-2">
-          <div className="text-sm font-black tracking-tight text-white">◆ SOCIAL<span className="text-emerald-400">PERP</span></div>
+      <Head><title>{last ? `${fmtPrice(last)} ${symbol}-PERP` : "Perp"} · The Monitor</title></Head>
+      <div className="flex min-h-screen flex-col bg-[#0b0e11]">
+        <header className="sticky top-0 z-40 flex shrink-0 items-center gap-4 border-b border-white/10 bg-[#0b0e11] px-4 py-2">
+          <div className="text-sm font-black tracking-tight text-white">◆ THE <span className="text-emerald-400">MONITOR</span></div>
           <div className="relative">
             <button onClick={() => setMenu((m) => !m)} className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-1.5 text-sm font-bold text-white hover:bg-white/10">
               {symbol}-PERP <span className="text-[10px] text-zinc-500">{mkt ? mkt.maxLeverage + "x" : ""}</span> <span className="text-zinc-500">▾</span>
@@ -177,40 +190,42 @@ export default function Home() {
 
         {noSocial && <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 px-4 py-1 text-[11px] text-amber-200">{conn.centaurKey ? <>No live Centaur data for {sref} yet. {data?.note ? <span className="font-mono">Reason: {data.note}</span> : null} If this persists, the market may not be in Centaur, or the key may lack access.</> : <>No social data for {sref} in the offline snapshot (it covers BTC / ETH / SOL / HYPE only). Add your Centaur key via “Add keys” for live data.</>}</div>}
 
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_272px_300px] grid-rows-[minmax(0,1fr)_270px]">
+        <div className="grid grid-cols-[minmax(0,1fr)_272px_300px] grid-rows-[540px_460px] border-b border-white/10">
           <section className="flex min-h-0 flex-col border-r border-white/10">
             <div className="flex items-center gap-1 border-b border-white/10 px-3 py-1.5 text-xs">
               {Object.keys(INTERVALS).map((k) => <button key={k} onClick={() => setIntervalKey(k)} className={`rounded px-2 py-0.5 ${interval === k ? "bg-white/15 text-white" : "text-zinc-500 hover:text-zinc-300"}`}>{k}</button>)}
-              <span className="ml-3 text-zinc-600">Avatars = tracked traders (X &amp; Telegram) · ring = direction · dashed = exit</span>
+              <span className="ml-3 hidden text-zinc-600 xl:inline">Avatars = tracked traders · ring = direction · dashed = exit</span>
+              <div className="ml-auto">
+                {data && <TraderFilter candidates={candidates} excluded={excluded} defaults={DEFAULT_EXCLUDED_TRADERS} onChange={changeExcluded} />}
+              </div>
             </div>
             <div className="min-h-0 flex-1">
-              <ErrorBoundary name="Chart"><Chart candles={candles} intervalMs={INTERVALS[interval]} events={data?.events || []} positions={data?.positions || []} traders={data?.traders || {}} lastPrice={last} showTrades={showTrades} showLevels={showLevels} selectedId={selected?.id} onSelect={setSelected} /></ErrorBoundary>
+              <ErrorBoundary name="Chart"><Chart candles={candles} intervalMs={INTERVALS[interval]} events={shownEvents} positions={shownPositions} traders={data?.traders || {}} lastPrice={last} showTrades={showTrades} showLevels={showLevels} selectedId={selected?.id} onSelect={setSelected} /></ErrorBoundary>
             </div>
           </section>
           <section className="row-span-2 min-h-0 border-r border-white/10"><OrderBook symbol={symbol} onPick={setPicked} /></section>
           <section className="row-span-2 min-h-0 overflow-auto">
             <OrderForm symbol={symbol} mid={last} apiKey={conn.ofKey} pickedPrice={picked} freeUsdc={freeUsdc} onNeedKey={() => setSettings(true)} onPlaced={loadAccount} />
           </section>
-          <section className="flex min-h-0 flex-col border-r border-t border-white/10">
-            <div className="flex border-b border-white/10 text-xs">
+          <section className="flex min-h-0 flex-col border-r border-white/10">
+            <div className="flex shrink-0 border-b border-white/10 text-xs">
               {([["social", `Social positioning · ${sref}`], ["mine", `My positions${myPositions.length ? ` (${myPositions.length})` : ""}`]] as const).map(([k, l]) => (
                 <button key={k} onClick={() => setBottomTab(k)} className={`px-4 py-2 font-medium ${bottomTab === k ? "border-b-2 border-emerald-400 text-white" : "text-zinc-500 hover:text-zinc-300"}`}>{l}</button>
               ))}
               {freeUsdc != null && <span className="ml-auto self-center px-4 text-zinc-400">Balance <b className="text-white">${fmtNum(freeUsdc)}</b> USDC</span>}
             </div>
-            <div className="min-h-0 flex-1">
+            <div className="min-h-0 flex-1 overflow-auto">
               {bottomTab === "social" ? (
-                data ? <ErrorBoundary name="Positioning"><Positioning symbol={sref} stats={data.stats} positions={data.positions} traders={data.traders} lastPrice={last} /></ErrorBoundary> : <div className="p-4 text-xs text-zinc-500">Loading…</div>
+                data ? <ErrorBoundary name="Positioning"><Positioning symbol={sref} stats={data.stats} positions={shownPositions} traders={data.traders} lastPrice={last} /></ErrorBoundary> : <div className="p-4 text-xs text-zinc-500">Loading…</div>
               ) : <MyPositions rows={myPositions} hasKey={hasKey} err={accErr} onConnect={() => setSettings(true)} />}
             </div>
           </section>
         </div>
       </div>
 
-      {mounted && <div className="pointer-events-none fixed bottom-1 right-2 z-[200] max-w-[60vw] rounded bg-black/80 px-2 py-1 font-mono text-[10px] text-zinc-300">Centaur: {diag}</div>}
       {mounted && data && showFeed && (
         <FloatingPanel id="feed" title={<>📡 Social feed · {sref}</>} defaultPos={{ x: 16, y: Math.max(120, win.h - 270 - 360 - 10) }} width={330} height={340} onClose={() => setShowFeed(false)}>
-          <ErrorBoundary name="Feed"><Feed feed={data.feed} traders={data.traders} selectedId={selected?.id} symbol={sref} onSelect={(e) => setSelected(e)} /></ErrorBoundary>
+          <ErrorBoundary name="Feed"><Feed feed={shownFeed} traders={data.traders} selectedId={selected?.id} symbol={sref} onSelect={(e) => setSelected(e)} /></ErrorBoundary>
         </FloatingPanel>
       )}
       {mounted && data && showAnalytics && (

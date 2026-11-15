@@ -2,8 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body, #__next { height: 100%; }
-body { background: #0b0e11 !important; color: #e4e4e7 !important; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+html, body, #__next { min-height: 100%; }
+body { background: #0b0e11 !important; color: #e4e4e7 !important; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-thumb { background: #ffffff1f; border-radius: 3px; }
 .line-clamp-4 { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
