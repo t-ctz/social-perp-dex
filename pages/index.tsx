@@ -123,10 +123,10 @@ export default function Home() {
 
   return (
     <>
-      <Head><title>{last ? `${fmtPrice(last)} ${symbol}-PERP` : "Perp"} · The Monitor</title></Head>
+      <Head><title>{last ? `${fmtPrice(last)} ${symbol}-PERP` : "Perp"} · Social Perp DEX</title></Head>
       <div className="flex h-screen flex-col bg-[#0b0e11]">
         <header className="flex shrink-0 items-center gap-4 border-b border-white/10 px-4 py-2">
-          <div className="text-sm font-black tracking-tight text-white">◆ THE <span className="text-emerald-400">MONITOR</span></div>
+          <div className="text-sm font-black tracking-tight text-white">◆ SOCIAL<span className="text-emerald-400">PERP</span></div>
           <div className="relative">
             <button onClick={() => setMenu((m) => !m)} className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-1.5 text-sm font-bold text-white hover:bg-white/10">
               {symbol}-PERP <span className="text-[10px] text-zinc-500">{mkt ? mkt.maxLeverage + "x" : ""}</span> <span className="text-zinc-500">▾</span>
