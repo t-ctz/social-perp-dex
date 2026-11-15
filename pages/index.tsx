@@ -27,6 +27,7 @@ export default function Home() {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [data, setData] = useState<CentaurPayload | null>(null);
+  const [diag, setDiag] = useState<string>("starting…");
   const [selected, setSelected] = useState<CEvent | null>(null);
   const [showTrades, setShowTrades] = useState(true);
   const [showLevels, setShowLevels] = useState(true);
@@ -65,11 +66,19 @@ export default function Home() {
 
   const sref = socialRef(symbol);
   usePoll(async () => {
-    const r = await fetch(`/api/centaur?symbol=${encodeURIComponent(sref)}`, { headers: { "x-centaur-key": conn.centaurKey, "x-centaur-base": conn.centaurBase } });
-    const d = await r.json();
-    // Never let a bad or empty response wipe data already on screen, or replace live data with the snapshot.
-    if (!r.ok || !d || !Array.isArray(d.feed) || !Array.isArray(d.events)) return;
-    setData((prev) => (d.source === "snapshot" && prev?.source === "live" && prev.symbol === d.symbol ? prev : d));
+    const at = new Date().toLocaleTimeString();
+    try {
+      const r = await fetch(`/api/centaur?symbol=${encodeURIComponent(sref)}`, { headers: { "x-centaur-key": conn.centaurKey, "x-centaur-base": conn.centaurBase } });
+      const text = await r.text();
+      let d: any = null;
+      try { d = JSON.parse(text); } catch { setDiag(`${at} HTTP ${r.status} non-JSON: ${text.slice(0, 80)}`); return; }
+      setDiag(`${at} HTTP ${r.status} · source=${d?.source} · feed=${d?.feed?.length} · events=${d?.events?.length} · pos=${d?.positions?.length} · key=${conn.centaurKey ? "set" : "none"}`);
+      // Never let a bad or empty response wipe data already on screen, or replace live data with the snapshot.
+      if (!r.ok || !d || !Array.isArray(d.feed) || !Array.isArray(d.events)) return;
+      setData((prev) => (d.source === "snapshot" && prev?.source === "live" && prev.symbol === d.symbol ? prev : d));
+    } catch (e: any) {
+      setDiag(`${at} fetch failed: ${String(e?.message || e).slice(0, 80)}`);
+    }
   }, 30000, [sref, conn.centaurKey, conn.centaurBase]);
 
   const loadAccount = async () => {
@@ -116,7 +125,7 @@ export default function Home() {
     <>
       <Head><title>{last ? `${fmtPrice(last)} ${symbol}-PERP` : "Perp"} · Social Perp DEX</title></Head>
       <div className="flex h-screen flex-col bg-[#0b0e11]">
-        <header className="flex shrink-0 items-center gap-5 border-b border-white/10 px-4 py-2">
+        <header className="flex shrink-0 items-center gap-4 border-b border-white/10 px-4 py-2">
           <div className="text-sm font-black tracking-tight text-white">◆ SOCIAL<span className="text-emerald-400">PERP</span></div>
           <div className="relative">
             <button onClick={() => setMenu((m) => !m)} className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-1.5 text-sm font-bold text-white hover:bg-white/10">
@@ -147,7 +156,7 @@ export default function Home() {
           </div>
           <div className="text-xl font-bold" style={{ color: chg >= 0 ? UP : DOWN }}>{fmtPrice(last)}</div>
           {mkt && mkt.collateral !== "USDC" && <span className="rounded bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-300" title="This HIP-3 market is margined in a non-USDC token">{mkt.collateral} margin</span>}
-          <div className="hidden gap-5 text-[11px] lg:flex">
+          <div className="hidden gap-5 text-[11px] 2xl:flex">
             <Stat k="24h change" v={fmtPct(chg)} c={chg >= 0 ? UP : DOWN} />
             <Stat k="24h volume" v={mkt ? "$" + fmtCompact(mkt.dayNtlVlm) : "–"} />
             <Stat k="Open interest" v={mkt ? "$" + fmtCompact(mkt.openInterest * mkt.markPx) : "–"} />
@@ -155,14 +164,14 @@ export default function Home() {
             <Stat k="Oracle" v={fmtPrice(mkt?.oraclePx)} />
             {data?.stats && <Stat k="Social long" v={data.stats.longPct + "%"} c={data.stats.longPct >= 50 ? UP : DOWN} />}
           </div>
-          <div className="ml-auto flex items-center gap-2 text-[11px]">
+          <div className="ml-auto flex shrink-0 items-center gap-2 text-[11px]">
             <Toggle on={showTrades} set={setShowTrades} label="Trades" />
             <Toggle on={showLevels} set={setShowLevels} label="Avg entry" />
             <Toggle on={showFeed} set={setShowFeed} label="Feed" />
             <Toggle on={showAnalytics} set={setShowAnalytics} label="Analytics" />
             <Toggle on={showChat} set={setShowChat} label="Agent" />
             {data && <span title={data.note} className={`rounded px-2 py-1 font-bold ${data.source === "live" ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>{data.source === "live" ? "● LIVE" : "SNAPSHOT"}</span>}
-            <button onClick={() => setSettings(true)} className="rounded-lg bg-white/10 px-3 py-1.5 font-semibold text-zinc-200 hover:bg-white/15">{hasKey || conn.centaurKey ? "⚙ Keys" : "🔑 Add keys"}</button>
+            <button onClick={() => setSettings(true)} className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 font-bold ${hasKey || conn.centaurKey ? "bg-white/10 text-zinc-200 hover:bg-white/15" : "bg-emerald-500 text-black hover:bg-emerald-400"}`}>{hasKey || conn.centaurKey ? "⚙ Keys" : "🔑 Add keys"}</button>
           </div>
         </header>
 
@@ -190,12 +199,15 @@ export default function Home() {
               {freeUsdc != null && <span className="ml-auto self-center px-4 text-zinc-400">Balance <b className="text-white">${fmtNum(freeUsdc)}</b> USDC</span>}
             </div>
             <div className="min-h-0 flex-1">
-              {bottomTab === "social" ? (data ? <ErrorBoundary name="Positioning"><Positioning symbol={sref} stats={data.stats} positions={data.positions} traders={data.traders} lastPrice={last} /></ErrorBoundary> : <div className="p-4 text-xs text-zinc-500">Loading…</div>) : <MyPositions rows={myPositions} hasKey={hasKey} err={accErr} onConnect={() => setSettings(true)} />}
+              {bottomTab === "social" ? (
+                data ? <ErrorBoundary name="Positioning"><Positioning symbol={sref} stats={data.stats} positions={data.positions} traders={data.traders} lastPrice={last} /></ErrorBoundary> : <div className="p-4 text-xs text-zinc-500">Loading…</div>
+              ) : <MyPositions rows={myPositions} hasKey={hasKey} err={accErr} onConnect={() => setSettings(true)} />}
             </div>
           </section>
         </div>
       </div>
 
+      {mounted && <div className="pointer-events-none fixed bottom-1 right-2 z-[200] max-w-[60vw] rounded bg-black/80 px-2 py-1 font-mono text-[10px] text-zinc-300">Centaur: {diag}</div>}
       {mounted && data && showFeed && (
         <FloatingPanel id="feed" title={<>📡 Social feed · {sref}</>} defaultPos={{ x: 16, y: Math.max(120, win.h - 270 - 360 - 10) }} width={330} height={340} onClose={() => setShowFeed(false)}>
           <ErrorBoundary name="Feed"><Feed feed={data.feed} traders={data.traders} selectedId={selected?.id} symbol={sref} onSelect={(e) => setSelected(e)} /></ErrorBoundary>
