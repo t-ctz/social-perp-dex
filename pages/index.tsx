@@ -9,6 +9,7 @@ import { Analytics } from "@/components/Analytics";
 import { Chat } from "@/components/Chat";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { FloatingPanel } from "@/components/FloatingPanel";
+import { Splitter } from "@/components/Splitter";
 import { TraderFilter, Candidate } from "@/components/TraderFilter";
 import { Conn, Settings } from "@/components/Settings";
 import { DOWN, UP, dirColor, fmtCompact, fmtNum, fmtPct, fmtPrice, timeAgo } from "@/lib/format";
@@ -21,6 +22,8 @@ import type { CEvent, Candle, CentaurPayload } from "@/lib/types";
 const INTERVALS: Record<string, number> = { "5m": 5 * 60e3, "15m": 15 * 60e3, "1h": 3600e3, "4h": 4 * 3600e3, "1d": 86400e3 };
 const DEFAULT_CONN: Conn = { ofKey: "", centaurKey: "", centaurBase: "https://api.centaur.io/v2", llmKey: "", llmBase: "https://openrouter.ai/api/v1", llmModel: "openai/gpt-4o-mini" };
 const CATS = ["all", "crypto", "stocks", "commodities", "indices", "fx", "preipo", "other"];
+const LAYOUT_DEFAULT = { chartH: 640, bottomH: 440, bookW: 272, formW: 300 };
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
@@ -31,6 +34,7 @@ export default function Home() {
   const [data, setData] = useState<CentaurPayload | null>(null);
   const [selected, setSelected] = useState<CEvent | null>(null);
   const [excluded, setExcluded] = useState<number[]>(DEFAULT_EXCLUDED_TRADERS);
+  const [layout, setLayout] = useState(LAYOUT_DEFAULT);
   const [showTrades, setShowTrades] = useState(true);
   const [showLevels, setShowLevels] = useState(true);
   const [showFeed, setShowFeed] = useState(true);
@@ -52,9 +56,13 @@ export default function Home() {
     setConn({ ...DEFAULT_CONN, ...loadLS<Partial<Conn>>("conn", {}) });
     setSymbol(loadLS("symbol", "BTC"));
     setExcluded(loadLS<number[]>("excludedTraders", DEFAULT_EXCLUDED_TRADERS));
+    setLayout({ ...LAYOUT_DEFAULT, ...loadLS<Partial<typeof LAYOUT_DEFAULT>>("layout", {}) });
     setWin({ w: window.innerWidth, h: window.innerHeight });
     setMounted(true);
   }, []);
+
+  // Save the layout only after it has loaded, so the defaults never overwrite a saved layout.
+  useEffect(() => { if (mounted) saveLS("layout", layout); }, [layout, mounted]);
 
   const changeExcluded = (ids: number[]) => { setExcluded(ids); saveLS("excludedTraders", ids); };
 
@@ -145,6 +153,7 @@ export default function Home() {
     if (m.name !== symbol) pick(m.name);
     setPrefill({ id: Date.now(), isBuy, price: e.price, reduceOnly, note: `${who} ${e.type} ${e.direction} ${e.symbol} @ ${fmtPrice(e.price)}`, deviationPct: null });
   };
+
   const hasKey = !!conn.ofKey;
   const noSocial = data && data.source === "snapshot" && !data.stats && data.positions.length === 0 && data.feed.length === 0;
 
@@ -213,35 +222,44 @@ export default function Home() {
             <button onClick={() => setSelected(null)} className="text-zinc-500 hover:text-zinc-200" title="Clear">✕</button>
           </div>
         )}
-        <div className="grid grid-cols-[minmax(0,1fr)_272px_300px] grid-rows-[540px_460px] border-b border-white/10">
-          <section className="flex min-h-0 flex-col border-r border-white/10">
-            <div className="flex items-center gap-1 border-b border-white/10 px-3 py-1.5 text-xs">
-              {Object.keys(INTERVALS).map((k) => <button key={k} onClick={() => setIntervalKey(k)} className={`rounded px-2 py-0.5 ${interval === k ? "bg-white/15 text-white" : "text-zinc-500 hover:text-zinc-300"}`}>{k}</button>)}
-              <span className="ml-3 hidden text-zinc-600 xl:inline">Avatars = tracked traders · ring = direction · dashed = exit</span>
-              <div className="ml-auto">
-                {data && <TraderFilter candidates={candidates} excluded={excluded} defaults={DEFAULT_EXCLUDED_TRADERS} onChange={changeExcluded} />}
+
+        {/* Resizable workspace: drag the grey bars to resize. Sizes are saved in this browser. */}
+        <div className="flex shrink-0 border-b border-white/10" style={{ height: layout.chartH + 6 + layout.bottomH }}>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <section className="flex min-h-0 flex-col" style={{ height: layout.chartH }}>
+              <div className="flex shrink-0 items-center gap-1 border-b border-white/10 px-3 py-1.5 text-xs">
+                {Object.keys(INTERVALS).map((k) => <button key={k} onClick={() => setIntervalKey(k)} className={`rounded px-2 py-0.5 ${interval === k ? "bg-white/15 text-white" : "text-zinc-500 hover:text-zinc-300"}`}>{k}</button>)}
+                <span className="ml-3 hidden text-zinc-600 xl:inline">Avatars = tracked traders · ring = direction · dashed = exit</span>
+                <div className="ml-auto flex items-center gap-2">
+                  {data && <TraderFilter candidates={candidates} excluded={excluded} defaults={DEFAULT_EXCLUDED_TRADERS} onChange={changeExcluded} />}
+                  <button onClick={() => setLayout(LAYOUT_DEFAULT)} className="rounded-full bg-white/5 px-2.5 py-1 font-medium text-zinc-400 hover:bg-white/10" title="Reset panel sizes">Reset layout</button>
+                </div>
               </div>
-            </div>
-            <div className="min-h-0 flex-1">
-              <ErrorBoundary name="Chart"><Chart candles={candles} intervalMs={INTERVALS[interval]} events={shownEvents} positions={shownPositions} traders={data?.traders || {}} lastPrice={last} showTrades={showTrades} showLevels={showLevels} selectedId={selected?.id} onSelect={setSelected} /></ErrorBoundary>
-            </div>
-          </section>
-          <section className="row-span-2 min-h-0 border-r border-white/10"><OrderBook symbol={symbol} onPick={setPicked} /></section>
-          <section className="row-span-2 min-h-0 overflow-auto">
+              <div className="min-h-0 flex-1">
+                <ErrorBoundary name="Chart"><Chart candles={candles} intervalMs={INTERVALS[interval]} events={shownEvents} positions={shownPositions} traders={data?.traders || {}} lastPrice={last} showTrades={showTrades} showLevels={showLevels} selectedId={selected?.id} onSelect={setSelected} /></ErrorBoundary>
+              </div>
+            </section>
+            <Splitter dir="y" onDelta={(d) => setLayout((l) => ({ ...l, chartH: clamp(l.chartH + d, 260, 1400) }))} />
+            <section className="flex min-h-0 flex-col" style={{ height: layout.bottomH }}>
+              <div className="flex shrink-0 border-b border-white/10 text-xs">
+                {([["social", `Social positioning · ${sref}`], ["mine", `My positions${myPositions.length ? ` (${myPositions.length})` : ""}`]] as const).map(([k, l]) => (
+                  <button key={k} onClick={() => setBottomTab(k)} className={`px-4 py-2 font-medium ${bottomTab === k ? "border-b-2 border-emerald-400 text-white" : "text-zinc-500 hover:text-zinc-300"}`}>{l}</button>
+                ))}
+                {freeUsdc != null && <span className="ml-auto self-center px-4 text-zinc-400">Balance <b className="text-white">${fmtNum(freeUsdc)}</b> USDC</span>}
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto">
+                {bottomTab === "social" ? (
+                  data ? <ErrorBoundary name="Positioning"><Positioning symbol={sref} stats={data.stats} positions={shownPositions} traders={data.traders} lastPrice={last} /></ErrorBoundary> : <div className="p-4 text-xs text-zinc-500">Loading…</div>
+                ) : <MyPositions rows={myPositions} hasKey={hasKey} err={accErr} onConnect={() => setSettings(true)} />}
+              </div>
+            </section>
+          </div>
+
+          <Splitter dir="x" onDelta={(d) => setLayout((l) => ({ ...l, bookW: clamp(l.bookW - d, 200, 700) }))} />
+          <section className="min-h-0 shrink-0 overflow-hidden" style={{ width: layout.bookW }}><OrderBook symbol={symbol} onPick={setPicked} /></section>
+          <Splitter dir="x" onDelta={(d) => setLayout((l) => ({ ...l, formW: clamp(l.formW - d, 240, 700) }))} />
+          <section className="min-h-0 shrink-0 overflow-auto" style={{ width: layout.formW }}>
             <OrderForm symbol={symbol} mid={last} apiKey={conn.ofKey} pickedPrice={picked} prefill={prefill} freeUsdc={freeUsdc} onNeedKey={() => setSettings(true)} onPlaced={loadAccount} />
-          </section>
-          <section className="flex min-h-0 flex-col border-r border-white/10">
-            <div className="flex shrink-0 border-b border-white/10 text-xs">
-              {([["social", `Social positioning · ${sref}`], ["mine", `My positions${myPositions.length ? ` (${myPositions.length})` : ""}`]] as const).map(([k, l]) => (
-                <button key={k} onClick={() => setBottomTab(k)} className={`px-4 py-2 font-medium ${bottomTab === k ? "border-b-2 border-emerald-400 text-white" : "text-zinc-500 hover:text-zinc-300"}`}>{l}</button>
-              ))}
-              {freeUsdc != null && <span className="ml-auto self-center px-4 text-zinc-400">Balance <b className="text-white">${fmtNum(freeUsdc)}</b> USDC</span>}
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto">
-              {bottomTab === "social" ? (
-                data ? <ErrorBoundary name="Positioning"><Positioning symbol={sref} stats={data.stats} positions={shownPositions} traders={data.traders} lastPrice={last} /></ErrorBoundary> : <div className="p-4 text-xs text-zinc-500">Loading…</div>
-              ) : <MyPositions rows={myPositions} hasKey={hasKey} err={accErr} onConnect={() => setSettings(true)} />}
-            </div>
           </section>
         </div>
       </div>
