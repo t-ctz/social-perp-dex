@@ -1,40 +1,57 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# The Monitor
 
-## Getting Started
+A Hyperliquid perp trading interface with social trader data overlaid on the chart, feed, and positioning panels.
 
-First, run the development server:
+**Live (latest):** https://social-perp-dex.vercel.app
+
+## What it does
+
+- **Markets:** all Hyperliquid perps, native and HIP-3 (stocks, commodities, FX, indices, pre-IPO). Chart, order book, and order form work on all of them.
+- **Trading:** market and limit orders through the OpenFinance API. Every order shows a confirmation dialog first. Nothing is sent without confirmation.
+- **Trader overlay:** each tracked trader's entries and exits appear as avatar markers on the chart. A feed shows their posts. The positioning panel shows the long/short split and each open position.
+- **Trader filter:** choose which traders appear. Three are excluded by default (hummusXBT, Nihilus, UNKNOWN TRADER).
+- **Trade buttons:** a feed post or chart marker can pre-fill the order form with that trader's action. It sets the side, a limit at the trader's entry price, and reduce-only for closes or trims. A warning appears if the price has moved more than 2%. It never sends an order on its own.
+- **Agent:** a read-only chat panel. It answers questions by calling Centaur and Hyperliquid data. It cannot place or cancel orders.
+
+## Keys
+
+Keys are entered in the browser under **Keys** (top right). They are stored in the browser's localStorage and sent only to this app's own API routes. No keys are in the code.
+
+| Key | Used for | Needed for |
+|---|---|---|
+| OpenFinance (`open_…`) | Account, balance, positions, orders | Trading |
+| Centaur | Live social data | Social overlays on every market |
+| LLM (OpenRouter by default) | Agent chat | Agent only |
+
+The **Check key** button in the Keys dialog calls `GET /agent/wallets` to confirm the key is accepted and shows the connected EVM wallet.
+
+Without a Centaur key, social data comes from a captured snapshot that covers BTC, ETH, SOL and HYPE only.
+
+## Architecture
+
+- **Framework:** Next.js (pages router), Tailwind, shadcn/ui primitives.
+- **Market data:** Hyperliquid `/info` (public), proxied at `/api/hl` and `/api/markets`.
+- **Account and orders:** OpenFinance `/agent/trading/*`, proxied at `/api/account` and `/api/order`. `/api/order` builds the Hyperliquid payload, and `dryRun` returns it without sending.
+- **Social data:** Centaur REST API v2 (`https://api.centaur.io/v2`, `x-api-key`), proxied at `/api/centaur`. Each Hyperliquid market is mapped to a Centaur asset ID (for example NVDA to 822). Each endpoint fails independently, and failures are reported in the status banner.
+- **Agent:** OpenAI-compatible tool-calling loop at `/api/agent`. Tools: Centaur queries, Hyperliquid markets, Hyperliquid order book.
+
+## Known limits
+
+- **Trading is not yet verified end to end.** Order building is tested. Live order submission with a funded account has not been run.
+- **Centaur live mode** has been tested with a real key for NVDA and works. Other markets depend on a Centaur asset match. Unmatched symbols show a banner.
+- **`xyz:NVDA` and `io:NVDA`** map to the same Centaur asset, so they show the same social data.
+- **Copy-trade prices** are the trader's entry price, which can be hours old. Check the warning before sending.
+- **Snapshot data** is static and only covers BTC, ETH, SOL and HYPE.
+
+## Running locally
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000 and add keys under **Keys**.
 
-You can start editing the page by modifying `pages/index.tsx`. The page auto-updates as you edit the file.
+## Deploying
 
-[API routes](https://nextjs.org/docs/api-routes/introduction) can be accessed on [http://localhost:3000/api/hello](http://localhost:3000/api/hello). This endpoint can be edited in `pages/api/hello.ts`.
-
-The `pages/api` directory is mapped to `/api/*`. Files in this directory are treated as [API routes](https://nextjs.org/docs/api-routes/introduction) instead of React pages.
-
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+Deployed on Vercel. `vercel.json` sets the framework to Next.js.

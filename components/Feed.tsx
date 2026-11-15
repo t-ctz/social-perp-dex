@@ -8,12 +8,13 @@ interface Props {
   traders: Record<number, Trader>;
   selectedId?: number | null;
   onSelect: (e: CEvent) => void;
+  onTrade: (e: CEvent) => void;
   symbol: string;
 }
 
 const ACT: Record<string, string> = { open: "opened", close: "closed", increase: "added", decrease: "trimmed" };
 
-export function Feed({ feed, traders, selectedId, onSelect, symbol }: Props) {
+export function Feed({ feed, traders, selectedId, onSelect, onTrade, symbol }: Props) {
   const [f, setF] = useState<"all" | "long" | "short">("all");
   const items = feed
     .filter((i) => f === "all" || i.events.some((e) => e.symbol === symbol && e.direction === f))
@@ -49,12 +50,21 @@ export function Feed({ feed, traders, selectedId, onSelect, symbol }: Props) {
                 )}
               </div>
               <p className="mt-1.5 line-clamp-4 whitespace-pre-line break-words text-xs leading-snug text-zinc-300">{it.text}</p>
-              <div className="mt-1.5 flex flex-wrap gap-1">
+              <div className="mt-1.5 flex flex-wrap items-center gap-1">
                 {it.events.map((ev) => (
                   <span key={ev.id} className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${ev.symbol === symbol ? "" : "opacity-50"}`} style={{ background: dirColor(ev.direction) + "22", color: dirColor(ev.direction) }}>
                     {ev.symbol} {ev.direction} {ACT[ev.type]} @ {fmtPrice(ev.price)}{ev.assumed ? " ~" : ""}
                   </span>
                 ))}
+                {e && e.symbol === symbol && (
+                  <button
+                    onClick={(ev) => { ev.stopPropagation(); onTrade(e); }}
+                    className="ml-auto rounded bg-sky-500/20 px-2 py-0.5 text-[10px] font-bold text-sky-200 hover:bg-sky-500/30"
+                    title="Fill the order form with this trader's action. You still confirm before anything is sent."
+                  >
+                    Trade ›
+                  </button>
+                )}
               </div>
             </div>
           );
