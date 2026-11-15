@@ -21,8 +21,9 @@ export function TraderFilter({ candidates, excluded, defaults, onChange }: Props
   const visible = candidates.filter((c) => !ex.has(c.id)).length;
 
   const toggle = (id: number) => {
-    const n = excluded.includes(id) ? excluded.filter((x) => x !== id) : [...excluded, id];
-    onChange(n);
+    const n = new Set(excluded);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    onChange([...n]);
   };
 
   return (
