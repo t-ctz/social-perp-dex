@@ -2,54 +2,48 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { snapshotPayload } from "@/lib/snapshot";
 import type { CEvent, CPosition, CentaurPayload, FeedItem, Trader, TrendingRow, FadeRow, SmartRow, SpecialistRow } from "@/lib/types";
 
-// Centaur social data for one Hyperliquid market.
-// 1. Resolve the symbol to a Centaur asset ID: search /assets, accept several response shapes,
-//    then fall back to IDs confirmed through Centaur's MCP.
-// 2. Query every endpoint by that numeric ID.
-// 3. Each endpoint succeeds or fails on its own; failures are named in `note`.
+// Centaur social data for one Hyperliquid market. Never assumes a response shape: every
+// response is coerced defensively, and any unexpected shape is reported in `note`.
 
 const DEFAULT_BASE = "https://api.centaur.io/v2";
-
-// Confirmed through the Centaur MCP (symbol -> asset id).
 const KNOWN: Record<string, number> = {
   BTC: 1, ETH: 10, SOL: 98, HYPE: 319, NVDA: 822, SNDK: 838, AERO: 287, AMD: 781, MSFT: 746, QQQ: 848,
   TSLA: 749, MU: 818, PEPE: 248, SP500: 839, XLV: 1175, NUAI: 1862, ONE: 69, RUNE: 80, POPCAT: 278, NEAR: 118, GRAM: 927,
 };
+const idCache = new Map<string, { id: number | null; t: number }>();
 
-const idCache = new Map<string, { id: number | null; why: string; t: number }>();
-
-async function get(base: string, path: string, key: string) {
+async function get(base: string, path: string, key: string): Promise<any> {
   const r = await fetch(base + path, { headers: { "x-api-key": key, accept: "application/json" } });
   if (!r.ok) throw new Error(`${path.split("?")[0]} HTTP ${r.status}`);
   return r.json();
 }
 
-function rowsOf(a: any): any[] {
-  if (Array.isArray(a)) return a;
-  return a?.results ?? a?.data ?? a?.items ?? a?.assets ?? [];
+/** Returns the array inside a response, whatever the wrapper is called. Never throws. */
+function rows(x: any): any[] {
+  if (Array.isArray(x)) return x;
+  if (!x || typeof x !== "object") return [];
+  for (const k of ["results", "data", "items", "assets", "traders", "events", "positions"]) {
+    if (Array.isArray(x[k])) return x[k];
+    if (x[k] && typeof x[k] === "object" && Array.isArray(x[k].results)) return x[k].results;
+  }
+  return [];
 }
+const sample = (x: any) => (x === null || x === undefined ? "null" : JSON.stringify(x).slice(0, 140));
+const obj = (x: any) => (x && typeof x === "object" && !Array.isArray(x) ? x : {});
+const num = (x: any) => (typeof x === "number" ? x : Number(x));
 
-async function resolveAssetId(base: string, key: string, sym: string): Promise<{ id: number | null; why: string }> {
+async function resolveAssetId(base: string, key: string, sym: string): Promise<number | null> {
   const hit = idCache.get(sym);
-  if (hit && Date.now() - hit.t < 3600_000) return hit;
-  let why = "";
+  if (hit && Date.now() - hit.t < 3600_000) return hit.id;
   let id: number | null = null;
   try {
     const a = await get(base, `/assets?search=${encodeURIComponent(sym)}&limit=50`, key);
-    const rows = rowsOf(a);
-    const exact = rows.find((x: any) => [x.symbol, x.ticker, x.slug].some((v) => typeof v === "string" && (v.toUpperCase() === sym || v.toUpperCase() === `EQUITIES-${sym}` || v.toUpperCase() === `CRYPTO-${sym}`)));
-    if (exact && typeof exact.id === "number") id = exact.id;
-    else why = `search returned ${rows.length} rows, none matched. Raw: ${JSON.stringify(a).slice(0, 160)}`;
-  } catch (e: any) {
-    why = e.message;
-  }
-  if (id === null && KNOWN[sym] !== undefined) {
-    id = KNOWN[sym];
-    why = "";
-  }
-  const v = { id, why, t: Date.now() };
-  idCache.set(sym, v);
-  return v;
+    const hitRow = rows(a).find((x: any) => [x.symbol, x.ticker].some((v) => typeof v === "string" && v.toUpperCase() === sym));
+    if (hitRow && Number.isFinite(num(hitRow.id))) id = num(hitRow.id);
+  } catch {}
+  if (id === null && KNOWN[sym] !== undefined) id = KNOWN[sym];
+  idCache.set(sym, { id, t: Date.now() });
+  return id;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -57,72 +51,87 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const key = String(req.headers["x-centaur-key"] || "");
   const base = String(req.headers["x-centaur-base"] || DEFAULT_BASE).replace(/\/$/, "");
   res.setHeader("cache-control", "no-store");
-
   if (!key) return res.json(snapshotPayload(symbol, "No Centaur API key set — showing captured snapshot (BTC/ETH/SOL/HYPE only)."));
 
+  const id = await resolveAssetId(base, key, symbol);
+  if (!id) return res.json(snapshotPayload(symbol, `Centaur has no asset named ${symbol}.`));
+
+  const notes: string[] = [];
+  const call = async (label: string, p: string) => {
+    try {
+      const j = await get(base, p, key);
+      return j;
+    } catch (e: any) {
+      notes.push(`${label}: ${e.message}`);
+      return null;
+    }
+  };
+
   try {
-    const { id, why } = await resolveAssetId(base, key, symbol);
-    if (!id) return res.json(snapshotPayload(symbol, `Centaur has no asset named ${symbol}. ${why}`));
-
     const ai = `assetIds=${id}`;
-    const errs: string[] = [];
-    const ok = <T,>(p: Promise<T>, label: string): Promise<T | null> => p.catch((e) => { errs.push(`${label}: ${e.message}`); return null; });
-
-    const [feedR, evR, posR, statR, trendR, fadeR, smartR, specR] = await Promise.all([
-      ok(get(base, `/feed?${ai}&limit=60`, key), "feed"),
-      ok(get(base, `/events?${ai}&limit=200`, key), "events"),
-      ok(get(base, `/positions/open?${ai}&limit=200`, key), "positions"),
-      ok(get(base, `/assets/stats?${ai}`, key), "stats"),
-      ok(get(base, `/signals/trending?limit=8`, key), "trending"),
-      ok(get(base, `/signals/crowd-fade?limit=8`, key), "fade"),
-      ok(get(base, `/signals/smart-money?limit=8`, key), "smart"),
-      ok(get(base, `/signals/specialist-ideas?limit=20`, key), "specialists"),
+    const [feedJ, evJ, posJ, statJ, trendJ, fadeJ, smartJ, specJ] = await Promise.all([
+      call("feed", `/feed?${ai}&limit=60`),
+      call("events", `/events?${ai}&limit=200`),
+      call("positions", `/positions/open?${ai}&limit=200`),
+      call("stats", `/assets/stats?${ai}`),
+      call("trending", `/signals/trending?limit=8`),
+      call("fade", `/signals/crowd-fade?limit=8`),
+      call("smart", `/signals/smart-money?limit=8`),
+      call("specialists", `/signals/specialist-ideas?limit=20`),
     ]);
 
     const traders: Record<number, Trader> = {};
     const feed: FeedItem[] = [];
-    for (const r of rowsOf(feedR)) {
-      const t = r.trader;
-      if (t) traders[t.id] = { id: t.id, name: t.name, avatar: t.avatarUrl, platform: r.source?.platform, handle: r.source?.identity?.handle || undefined, audience: r.source?.identity?.audienceCount };
-      const evs: CEvent[] = (r.events || [])
-        .filter((e: any) => !e.assetId || e.assetId === id)
-        .map((e: any) => ({ id: e.id, type: e.type, direction: e.direction, price: e.price, time: e.timeOfEvent, traderId: e.traderId, positionId: e.positionId, assumed: e.assumed, messageId: r.id, symbol }));
+    for (const r of rows(feedJ)) {
+      const t = obj(r.trader);
+      if (t.id !== undefined) traders[num(t.id)] = { id: num(t.id), name: String(t.name ?? `#${t.id}`), avatar: t.avatarUrl, platform: obj(r.source).platform, handle: obj(r.source).identity?.handle, audience: obj(r.source).identity?.audienceCount };
+      const evs: CEvent[] = rows(r.events)
+        .filter((e: any) => !e.assetId || num(e.assetId) === id)
+        .map((e: any) => ({ id: num(e.id), type: e.type, direction: e.direction, price: num(e.price), time: e.timeOfEvent, traderId: num(e.traderId), positionId: e.positionId, assumed: e.assumed, messageId: r.id, symbol }));
       if (!evs.length) continue;
-      feed.push({ id: r.id, time: r.writtenAt, text: r.source?.text || "", url: r.source?.url, platform: r.source?.platform, traderId: t?.id ?? evs[0].traderId, events: evs });
+      feed.push({ id: String(r.id), time: r.writtenAt, text: String(obj(r.source).text ?? ""), url: obj(r.source).url, platform: obj(r.source).platform, traderId: num(t.id ?? evs[0].traderId), events: evs });
     }
-    const events: CEvent[] = rowsOf(evR).map((e: any) => ({ id: e.id, type: e.type, direction: e.direction, price: e.price, time: e.timeOfEvent, traderId: e.traderId, positionId: e.positionId, assumed: e.assumed, messageId: e.messageId, symbol }));
-    const positions: CPosition[] = rowsOf(posR).map((p: any) => ({ id: p.id, direction: p.direction, openAt: p.openAt, openPrice: p.openPrice, ret: p.currentReturnPercentage, traderId: p.traderId, symbol }));
+    const events: CEvent[] = rows(evJ).map((e: any) => ({ id: num(e.id), type: e.type, direction: e.direction, price: num(e.price), time: e.timeOfEvent, traderId: num(e.traderId), positionId: e.positionId, assumed: e.assumed, messageId: e.messageId, symbol }));
+    const positions: CPosition[] = rows(posJ).map((p: any) => ({ id: num(p.id), direction: p.direction, openAt: p.openAt, openPrice: num(p.openPrice), ret: num(p.currentReturnPercentage), traderId: num(p.traderId), symbol }));
 
-    const missing = Array.from(new Set([...events.map((e) => e.traderId), ...positions.map((p) => p.traderId)])).filter((t) => !traders[t]).slice(0, 100);
-    if (missing.length) {
-      const dir = await ok(get(base, `/traders?traderIds=${missing.join(",")}&limit=200`, key), "traders");
-      for (const t of rowsOf(dir)) traders[t.id] = { id: t.id, name: t.name, avatar: t.avatarUrl, platform: t.source?.platform, handle: t.source?.handle || undefined, audience: t.source?.audienceCount };
+    const need = Array.from(new Set([...events.map((e) => e.traderId), ...positions.map((p) => p.traderId)])).filter((t) => !traders[t]).slice(0, 100);
+    if (need.length) {
+      const dir = await call("traders", `/traders?traderIds=${need.join(",")}&limit=200`);
+      for (const t of rows(dir)) traders[num(t.id)] = { id: num(t.id), name: String(t.name ?? `#${t.id}`), avatar: t.avatarUrl, platform: obj(t.source).platform, handle: obj(t.source).handle, audience: obj(t.source).audienceCount };
     }
 
     const ids = new Set<number>();
-    [trendR, fadeR, smartR, specR].forEach((s) => rowsOf(s).forEach((r: any) => ids.add(r.assetId)));
-    const sym: Record<number, string> = {};
+    [trendJ, fadeJ, smartJ, specJ].forEach((s) => rows(s).forEach((r: any) => ids.add(num(r.assetId))));
+    const names: Record<number, string> = {};
     if (ids.size) {
-      const a = await ok(get(base, `/assets?assetIds=${Array.from(ids).join(",")}&limit=200`, key), "asset names");
-      for (const x of rowsOf(a)) sym[x.id] = x.symbol;
+      const a = await call("asset names", `/assets?assetIds=${Array.from(ids).join(",")}&limit=200`);
+      for (const x of rows(a)) names[num(x.id)] = String(x.symbol);
     }
-    const S = (i: number) => sym[i] || `#${i}`;
-    const trending: TrendingRow[] = rowsOf(trendR).map((r: any) => ({ symbol: S(r.assetId), direction: r.direction, traders: r.traderCount, netNow: r.netNow, netBefore: r.netBefore, delta: r.delta, openReturn: r.openReturnPercent }));
-    const fade: FadeRow[] = rowsOf(fadeR).map((r: any) => ({ symbol: S(r.assetId), crowdDir: r.direction, fadeDir: r.fadeDirection, net: r.net, traders: r.traderCount, openReturn: r.openReturnPercent }));
-    const smart: SmartRow[] = rowsOf(smartR).map((r: any) => ({ symbol: S(r.assetId), gap: r.gap, smartDir: r.smart.direction, smartNetPct: r.smart.netPercent, smartRet: r.smart.openReturnPercent, crowdDir: r.crowd.direction, crowdNetPct: r.crowd.netPercent, crowdRet: r.crowd.openReturnPercent }));
-    const specialists: SpecialistRow[] = rowsOf(specR).map((r: any) => ({ symbol: S(r.assetId), direction: r.direction, count: r.specialists?.length ?? r.traderCount, avgWin: r.specialists?.length ? r.specialists.reduce((s: number, x: any) => s + x.winRatePercent, 0) / r.specialists.length : 0, openReturn: r.openReturnPercent }));
+    const S = (i: number) => names[i] || `#${i}`;
+    const trending: TrendingRow[] = rows(trendJ).map((r: any) => ({ symbol: S(num(r.assetId)), direction: r.direction, traders: num(r.traderCount), netNow: num(r.netNow), netBefore: num(r.netBefore), delta: num(r.delta), openReturn: num(r.openReturnPercent) }));
+    const fade: FadeRow[] = rows(fadeJ).map((r: any) => ({ symbol: S(num(r.assetId)), crowdDir: r.direction, fadeDir: r.fadeDirection, net: num(r.net), traders: num(r.traderCount), openReturn: num(r.openReturnPercent) }));
+    const smart: SmartRow[] = rows(smartJ).map((r: any) => ({ symbol: S(num(r.assetId)), gap: num(r.gap), smartDir: obj(r.smart).direction, smartNetPct: num(obj(r.smart).netPercent), smartRet: num(obj(r.smart).openReturnPercent), crowdDir: obj(r.crowd).direction, crowdNetPct: num(obj(r.crowd).netPercent), crowdRet: num(obj(r.crowd).openReturnPercent) }));
+    const specialists: SpecialistRow[] = rows(specJ).map((r: any) => {
+      const sp = rows({ results: r.specialists });
+      return { symbol: S(num(r.assetId)), direction: r.direction, count: sp.length || num(r.traderCount), avgWin: sp.length ? sp.reduce((s, x) => s + num(x.winRatePercent), 0) / sp.length : 0, openReturn: num(r.openReturnPercent) };
+    });
 
-    const mp = rowsOf(statR)[0]?.summary?.marketPositioning ?? statR?.results?.[0]?.summary?.marketPositioning;
-    const total = mp ? mp.longCount + mp.shortCount : 0;
-    const payload: CentaurPayload = {
+    const mp = obj(rows(statJ)[0]?.summary).marketPositioning ?? obj(obj(statJ).results?.[0]?.summary).marketPositioning;
+    const total = mp ? num(mp.longCount) + num(mp.shortCount) : 0;
+
+    // If a response arrived but had no recognisable rows, say what it looked like.
+    const shapes = [["feed", feedJ], ["positions", posJ], ["events", evJ], ["stats", statJ]]
+      .filter(([, j]) => j && rows(j).length === 0)
+      .map(([l, j]) => `${l} empty; raw ${sample(j)}`);
+
+    res.json({
       source: "live",
-      note: errs.length ? `Partial live data (Centaur asset ${id}). Failed: ${errs.join("; ")}` : `Live Centaur data (asset ${id}).`,
-      asOf: feedR?.meta?.serverTime || new Date().toISOString(),
+      note: `Live Centaur data (asset ${id}).${notes.length ? " Failed: " + notes.join("; ") : ""}${shapes.length ? " Shape: " + shapes.join(" | ") : ""}`,
+      asOf: obj(feedJ).meta?.serverTime || new Date().toISOString(),
       symbol, feed, events, positions, traders, trending, fade, smart, specialists,
-      stats: mp ? { longCount: mp.longCount, shortCount: mp.shortCount, longPct: mp.longPercentage ?? +((mp.longCount / total) * 100).toFixed(1), shortPct: mp.shortPercentage ?? +((mp.shortCount / total) * 100).toFixed(1) } : null,
-    };
-    res.json(payload);
+      stats: mp ? { longCount: num(mp.longCount), shortCount: num(mp.shortCount), longPct: num(mp.longPercentage ?? (total ? (num(mp.longCount) / total) * 100 : 50)), shortPct: num(mp.shortPercentage ?? (total ? (num(mp.shortCount) / total) * 100 : 50)) } : null,
+    } as CentaurPayload);
   } catch (e: any) {
-    res.json(snapshotPayload(symbol, `Live Centaur call failed (${e?.message}) — showing snapshot instead.`));
+    res.json(snapshotPayload(symbol, `Live Centaur mapping failed (${String(e?.message || e).slice(0, 160)}) — showing snapshot.`));
   }
 }
